@@ -5,7 +5,7 @@
 # 1. Generates a release build.
 # 2. If the last commit is a version change, publish.
 
-name: Build and Publish (on tag)
+name: Master
 
 on:
   push:
