@@ -1212,10 +1212,7 @@ impl SafeUrl {
     //    blue would be returned when key is "color".
     fn query_key_last_internal(query_str: &str, key: &str) -> Option<String> {
         let matches = Self::query_key_internal(query_str, key);
-        match matches.last() {
-            Some(v) => Some(v.to_string()),
-            None => None,
-        }
+        matches.last().map(|v| v.to_string())
     }
 
     // utility to query a key from a query string.
@@ -1224,10 +1221,7 @@ impl SafeUrl {
     //    blue would be returned when key is "color".
     fn query_key_first_internal(query_str: &str, key: &str) -> Option<String> {
         let matches = Self::query_key_internal(query_str, key);
-        match matches.first() {
-            Some(v) => Some(v.to_string()),
-            None => None,
-        }
+        matches.first().map(|v| v.to_string())
     }
 
     fn xor_name_from_nrs_string(name: &str) -> XorName {

@@ -193,9 +193,9 @@ impl SafeUrlParts {
         Ok(Self {
             scheme,
             public_name,
+            top_name,
             sub_names,
             sub_names_vec,
-            top_name,
             path,
             query_string,
             fragment,
