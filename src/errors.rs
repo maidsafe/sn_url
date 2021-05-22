@@ -24,4 +24,7 @@ pub enum Error {
     /// InvalidMediaType
     #[error("InvalidMediaType: {0}")]
     InvalidMediaType(String),
+    /// Checksum verification failure
+    #[error("Checksum verification failed")]
+    Checksum,
 }

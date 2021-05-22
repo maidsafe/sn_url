@@ -16,7 +16,8 @@ const SAFE_URL_SCHEME: &str = "safe";
 
 // URL labels must be 63 characters or less.
 // See https://www.ietf.org/rfc/rfc1035.txt
-const MAX_LEN_URL_LABELS: usize = 63;
+// We allow labels to be a bit larger to accomodate for xorurl checksums
+const MAX_LEN_URL_LABELS: usize = 70;
 
 // Invalid NRS characters
 // These are characters that have no visual presence.

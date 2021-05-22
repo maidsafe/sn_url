@@ -7,10 +7,12 @@
 // specific language governing permissions and limitations relating to use of the SAFE Network
 // Software.
 
+mod checksum;
 mod errors;
 mod url_parts;
 mod xorurl_media_types;
 
+use checksum::{calculate_checksum_bytes, verify_checksum};
 pub use errors::{Error, Result};
 use log::{info, trace, warn};
 use multibase::{decode as base_decode, encode as base_encode, Base};
@@ -390,10 +392,7 @@ impl SafeUrl {
         match Self::from_xorurl(url) {
             Ok(enc) => Ok(enc),
             Err(err) => {
-                info!(
-                    "Falling back to NRS. XorUrl decoding failed with: {:?}",
-                    err
-                );
+                info!("Falling back to NRS. XOR-URL decoding failed with: {}", err);
                 Self::from_nrsurl(url)
             }
         }
@@ -431,8 +430,12 @@ impl SafeUrl {
     pub fn from_xorurl(xorurl: &str) -> Result<Self> {
         let parts = SafeUrlParts::parse(&xorurl, true)?;
 
-        let (_base, xorurl_bytes): (Base, Vec<u8>) = base_decode(&parts.top_name)
+        let (_, checksumed_xorurl_bytes): (Base, Vec<u8>) = base_decode(&parts.top_name)
             .map_err(|err| Error::InvalidXorUrl(format!("Failed to decode XOR-URL: {:?}", err)))?;
+
+        // verify checksum matches
+        let xorurl_bytes = verify_checksum(&checksumed_xorurl_bytes)
+            .map_err(|err| Error::InvalidXorUrl(err.to_string()))?;
 
         let type_tag_offset = XOR_NAME_BYTES_OFFSET + XOR_NAME_LEN; // offset where to find the type tag bytes
 
@@ -910,6 +913,10 @@ impl SafeUrl {
         // add the non-zero bytes of type_tag
         cid_vec.extend_from_slice(&self.type_tag.to_be_bytes()[start_byte..]);
 
+        // calculate checksum and append it to CID
+        let checksum = calculate_checksum_bytes(&cid_vec);
+        cid_vec.extend_from_slice(&checksum);
+
         let base_encoding = match base {
             XorUrlBase::Base32z => Base::Base32Z,
             XorUrlBase::Base32 => Base::Base32Lower,
@@ -1369,8 +1376,12 @@ mod tests {
             XorUrlBase::Base32,
         )?;
         let base32_xorurl =
-            "safe://baeaaaajrgiztinjwg44dsmbrgiztinjwg44dsmbrgiztinjwg44dsmbrgktdepcnjiza";
+            "safe://baeaaaajrgiztinjwg44dsmbrgiztinjwg44dsmbrgiztinjwg44dsmbrgktdepcnjizbun42b4";
         assert_eq!(xorurl, base32_xorurl);
+
+        let decoded = SafeUrl::from_xorurl(base32_xorurl)?;
+        assert_eq!(decoded.xorname(), xor_name);
+
         Ok(())
     }
 
@@ -1378,8 +1389,13 @@ mod tests {
     fn test_safeurl_base32z_encoding() -> Result<()> {
         let xor_name = XorName(*b"12345678901234567890123456789012");
         let xorurl = SafeUrl::encode_blob(xor_name, SafeContentType::Raw, XorUrlBase::Base32z)?;
-        let base32z_xorurl = "safe://hyryyyyjtge3uepjsghhd1cbtge3uepjsghhd1cbtge3uepjsghhd1cbtge";
+        let base32z_xorurl =
+            "safe://hyryyyyjtge3uepjsghhd1cbtge3uepjsghhd1cbtge3uepjsghhd1cbtgjq1mznt";
         assert_eq!(xorurl, base32z_xorurl);
+
+        let decoded = SafeUrl::from_xorurl(base32z_xorurl)?;
+        assert_eq!(decoded.xorname(), xor_name);
+
         Ok(())
     }
 
@@ -1393,7 +1409,7 @@ mod tests {
             XorUrlBase::Base64,
             false,
         )?;
-        let base64_xorurl = "safe://mAQACBTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyRfRh";
+        let base64_xorurl = "safe://mAQACBTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyRfRhdMsIMQ";
         assert_eq!(xorurl, base64_xorurl);
         let safeurl = SafeUrl::from_url(&base64_xorurl)?;
         assert_eq!(base64_xorurl, safeurl.to_base(XorUrlBase::Base64));
@@ -1409,9 +1425,14 @@ mod tests {
     #[test]
     fn test_safeurl_default_base_encoding() -> Result<()> {
         let xor_name = XorName(*b"12345678901234567890123456789012");
-        let base32z_xorurl = "safe://hyryyyyjtge3uepjsghhd1cbtge3uepjsghhd1cbtge3uepjsghhd1cbtge";
+        let base32z_xorurl =
+            "safe://hyryyyyjtge3uepjsghhd1cbtge3uepjsghhd1cbtge3uepjsghhd1cbtgjq1mznt";
         let xorurl = SafeUrl::encode_blob(xor_name, SafeContentType::Raw, DEFAULT_XORURL_BASE)?;
         assert_eq!(xorurl, base32z_xorurl);
+
+        let decoded = SafeUrl::from_xorurl(base32z_xorurl)?;
+        assert_eq!(decoded.xorname(), xor_name);
+
         Ok(())
     }
 
@@ -1541,7 +1562,7 @@ mod tests {
                 "Unexpectedly parsed an invalid (too long) xorurl".to_string(),
             )),
             Err(Error::InvalidXorUrl(msg)) => {
-                assert!(msg.starts_with("Invalid XOR-URL, encoded string too long"));
+                assert!(msg.starts_with("Checksum verification failed"));
                 Ok(())
             }
             other => Err(anyhow!(
@@ -1554,20 +1575,20 @@ mod tests {
     #[test]
     fn test_safeurl_too_short() -> Result<()> {
         let xor_name = XorName(*b"12345678901234567890123456789012");
-        let xorurl = SafeUrl::encode_blob(
+        let mut xorurl = SafeUrl::encode_blob(
             xor_name,
             SafeContentType::MediaType("text/html".to_string()),
             XorUrlBase::Base32z,
         )?;
 
-        // TODO: we need to add checksum to be able to detect even 1 single char change
-        let len = xorurl.len() - 2;
-        match SafeUrl::from_xorurl(&xorurl[..len]) {
+        // corrupt last char
+        xorurl.replace_range(xorurl.len() - 1.., "x");
+        match SafeUrl::from_xorurl(&xorurl) {
             Ok(_) => Err(anyhow!(
                 "Unexpectedly parsed an invalid (too short) xorurl".to_string(),
             )),
             Err(Error::InvalidXorUrl(msg)) => {
-                assert!(msg.starts_with("Invalid XOR-URL, encoded string too short"));
+                assert!(msg.starts_with("Checksum verification failed"));
                 Ok(())
             }
             other => Err(anyhow!(
@@ -1741,7 +1762,7 @@ mod tests {
     fn test_safeurl_to_string() -> Result<()> {
         // These two are equivalent.  ie, the xorurl is the result of nrs.to_xorurl_string()
         let nrsurl = "safe://my.sub.domain/path/my%20dir/my%20file.txt?this=that&this=other&color=blue&v=5&name=John+Doe#somefragment";
-        let xorurl = "safe://my.sub.hyryygbmk9cke7k99tyhp941od8q375wxgaqeyiag8za1jnpzbw9pb61sccn7a/path/my%20dir/my%20file.txt?this=that&this=other&color=blue&v=5&name=John+Doe#somefragment";
+        let xorurl = "safe://my.sub.hyryygbmk9cke7k99tyhp941od8q375wxgaqeyiag8za1jnpzbw9pb61sccn7azofw11o/path/my%20dir/my%20file.txt?this=that&this=other&color=blue&v=5&name=John+Doe#somefragment";
 
         let nrs = SafeUrl::from_url(nrsurl)?;
         let xor = SafeUrl::from_url(xorurl)?;
