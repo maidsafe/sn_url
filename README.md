@@ -1,3 +1,8 @@
+## **PLEASE NOTE THAT THIS REPOSITORY HAS NOW BEEN ARCHIVED**
+### All URL development is now via the [safe_network](https://github.com/maidsafe/safe_network) repository
+
+#
+
 # The Safe URL
 
 | [MaidSafe website](https://maidsafe.net) | [Safe Dev Forum](https://forum.safedev.org) | [Safe Network Forum](https://safenetforum.org) |
