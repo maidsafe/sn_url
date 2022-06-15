@@ -1,18 +1,17 @@
-// Copyright 2020 MaidSafe.net limited.
+// Copyright 2022 MaidSafe.net limited.
 //
-// This SAFE Network Software is licensed to you under the MIT license <LICENSE-MIT
-// http://opensource.org/licenses/MIT> or the Modified BSD license <LICENSE-BSD
-// https://opensource.org/licenses/BSD-3-Clause>, at your option. This file may not be copied,
-// modified, or distributed except according to those terms. Please review the Licences for the
-// specific language governing permissions and limitations relating to use of the SAFE Network
-// Software.
+// This SAFE Network Software is licensed to you under The General Public License (GPL), version 3.
+// Unless required by applicable law or agreed to in writing, the SAFE Network Software distributed
+// under the GPL Licence is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied. Please review the Licences for the specific language governing
+// permissions and limitations relating to use of the SAFE Network Software.
 
-use crate::{Error, Result};
-use log::debug;
+use super::{Error, Result};
+use tracing::debug;
 use uhttp_uri::HttpUri;
 use url::Url;
 
-const SAFE_URL_SCHEME: &str = "safe";
+const URL_SCHEME: &str = "safe";
 
 // URL labels must be 63 characters or less.
 // See https://www.ietf.org/rfc/rfc1035.txt
@@ -64,22 +63,23 @@ const INVALID_NRS_CHARS: [char; 30] = [
 // A simple struct to represent the basic components parsed
 // from a Safe URL without any decoding.
 //
-// This is kept internal to the crate, at least for now.
+// This is kept internal to the parent module.
 #[derive(Debug, Clone)]
-pub(crate) struct SafeUrlParts {
-    pub scheme: String,
-    pub public_name: String, // "a.b.name" in "a.b.name"
-    pub top_name: String,    // "name"     in "a.b.name"
-    pub sub_names: String,   // "a.b"      in "a.b.name"
-    pub sub_names_vec: Vec<String>,
-    pub path: String,
-    pub query_string: String,
-    pub fragment: String,
+pub(super) struct UrlParts {
+    #[allow(dead_code)]
+    pub(super) scheme: String,
+    pub(super) public_name: String, // "a.b.name" in "a.b.name"
+    pub(super) top_name: String,    // "name"     in "a.b.name"
+    pub(super) sub_names: String,   // "a.b"      in "a.b.name"
+    pub(super) sub_names_vec: Vec<String>,
+    pub(super) path: String,
+    pub(super) query_string: String,
+    pub(super) fragment: String,
 }
 
-impl SafeUrlParts {
+impl UrlParts {
     // parses a URL into its component parts, performing basic validation.
-    pub fn parse(url: &str, ignore_labels_size: bool) -> Result<Self> {
+    pub(super) fn parse(url: &str, ignore_labels_size: bool) -> Result<Self> {
         // detect any invalid url chars before parsing
         validate_url_chars(url)?;
         // Note: we use rust-url for parsing because it is most widely used
@@ -87,18 +87,15 @@ impl SafeUrlParts {
         // (see below) we use a different parser to avoid normalization.
         // Parsing twice is inefficient, so there is room for improvement
         // later to standardize on a single parser.
-        let parsing_url = Url::parse(&url).map_err(|parse_err| {
+        let parsing_url = Url::parse(url).map_err(|parse_err| {
             let msg = format!("Problem parsing the URL \"{}\": {}", url, parse_err);
             Error::InvalidXorUrl(msg)
         })?;
 
         // Validate the url scheme is 'safe'
         let scheme = parsing_url.scheme().to_string();
-        if scheme != SAFE_URL_SCHEME {
-            let msg = format!(
-                "invalid scheme: '{}'. expected: '{}'",
-                scheme, SAFE_URL_SCHEME
-            );
+        if scheme != URL_SCHEME {
+            let msg = format!("invalid scheme: '{}'. expected: '{}'", scheme, URL_SCHEME);
             return Err(Error::InvalidXorUrl(msg));
         }
 
@@ -225,10 +222,10 @@ fn validate_url_chars(url: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::{anyhow, Result};
+    use color_eyre::{eyre::eyre, Result};
 
     #[test]
-    fn test_safeurl_validate_url_chars_with_whitespace() -> Result<()> {
+    fn test_url_validate_url_chars_with_whitespace() -> Result<()> {
         let urls = vec![
             // tests for
             // https://www.unicode.org/Public/UCD/latest/ucd/PropList.txt
@@ -260,18 +257,15 @@ mod tests {
             "safe://ideographic\u{3000}space",
         ];
         for url in urls {
-            match SafeUrlParts::parse(&url, false) {
+            match UrlParts::parse(url, false) {
                 Ok(_) => {
-                    return Err(anyhow!(
-                        "Unexpectedly validated url with whitespace {}",
-                        url
-                    ));
+                    return Err(eyre!("Unexpectedly validated url with whitespace {}", url));
                 }
                 Err(Error::InvalidInput(msg)) => {
                     assert_eq!(msg, "The URL cannot contain whitespace".to_string());
                 }
                 Err(err) => {
-                    return Err(anyhow!("Error returned is not the expected one: {}", err));
+                    return Err(eyre!("Error returned is not the expected one: {}", err));
                 }
             };
         }
@@ -279,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn test_safeurl_validate_url_chars_with_control_characters() -> Result<()> {
+    fn test_url_validate_url_chars_with_control_characters() -> Result<()> {
         let urls = vec![
             // tests for
             // https://en.wikipedia.org/wiki/C0_and_C1_control_codes#Basic_ASCII_control_codes
@@ -349,9 +343,9 @@ mod tests {
             "safe://application\u{009F}programcommand",
         ];
         for url in urls {
-            match SafeUrlParts::parse(&url, false) {
+            match UrlParts::parse(url, false) {
                 Ok(_) => {
-                    return Err(anyhow!(
+                    return Err(eyre!(
                         "Unexpectedly validated url with control character {}",
                         url
                     ));
@@ -360,7 +354,7 @@ mod tests {
                     assert_eq!(msg, "The URL cannot contain control characters".to_string());
                 }
                 Err(err) => {
-                    return Err(anyhow!("Error returned is not the expected one: {}", err));
+                    return Err(eyre!("Error returned is not the expected one: {}", err));
                 }
             };
         }
@@ -368,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn test_safeurl_validate_url_chars_with_invalid_characters() -> Result<()> {
+    fn test_url_validate_url_chars_with_invalid_characters() -> Result<()> {
         let urls = vec![
             // values from
             // INVALID_NRS_CHARS const
@@ -404,9 +398,9 @@ mod tests {
             "safe://nominal\u{206F}digitshapes",
         ];
         for url in urls {
-            match SafeUrlParts::parse(&url, false) {
+            match UrlParts::parse(url, false) {
                 Ok(_) => {
-                    return Err(anyhow!(
+                    return Err(eyre!(
                         "Unexpectedly validated url with invalid character {}",
                         url
                     ));
@@ -415,7 +409,7 @@ mod tests {
                     assert_eq!(msg, "The URL cannot contain invalid characters".to_string());
                 }
                 Err(err) => {
-                    return Err(anyhow!("Error returned is not the expected one: {}", err));
+                    return Err(eyre!("Error returned is not the expected one: {}", err));
                 }
             };
         }
