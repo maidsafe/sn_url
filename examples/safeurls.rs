@@ -7,15 +7,13 @@
 // specific language governing permissions and limitations relating to use of the SAFE Network
 // Software.
 
-use rand::rngs::OsRng;
-use sn_data_types::Keypair;
-use sn_url::{Error, SafeDataType, SafeUrl, XorUrlBase};
+use sn_interface::types::Keypair;
+use sn_url::{DataType, Error, SafeUrl, XorUrlBase};
 use xor_name::XorName;
 
 fn main() -> Result<(), Error> {
     // Let's generate a ranadom key pair
-    let mut rng = OsRng;
-    let keypair = Keypair::new_ed25519(&mut rng);
+    let keypair = Keypair::new_ed25519();
 
     // We get the corresponding Xorname for
     // the random public key we obtained
@@ -23,14 +21,14 @@ fn main() -> Result<(), Error> {
 
     // We can encode a SafeKey XOR-URL using the Xorname
     // and specifying Base32z as the base encoding for it
-    let xorurl = SafeUrl::encode_safekey(xorname, XorUrlBase::Base32z)?;
+    let xorurl = SafeUrl::from_safekey(xorname)?.encode(XorUrlBase::Base32z);
 
     println!("XorUrl: {}", xorurl);
 
-    // We can parse a Safe-URL and obtain a SafeUrl instance
+    // We can parse a Safe-URL string and obtain a SafeUrl instance
     let safe_url = SafeUrl::from_url(&xorurl)?;
 
-    assert_eq!(safe_url.data_type(), SafeDataType::SafeKey);
+    assert_eq!(safe_url.data_type(), DataType::SafeKey);
     println!("Data type: {}", safe_url.data_type());
 
     assert_eq!(safe_url.xorname(), xorname);
