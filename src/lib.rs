@@ -16,7 +16,6 @@ mod xorurl_media_types;
 pub use errors::{Error, Result};
 use multibase::{decode as base_decode, encode as base_encode, Base};
 use serde::{Deserialize, Serialize};
-use sn_interface::types::{DataAddress, RegisterAddress};
 use std::fmt;
 use tracing::{info, trace, warn};
 use url::Url;
@@ -228,8 +227,9 @@ pub struct SafeUrl {
     sub_names: String,          // "a.b" in "a.b.name"
     sub_names_vec: Vec<String>, // vec!["a", "b"] in "a.b.name"
     type_tag: u64,
-    address: DataAddress,                 // See DataAddress
-    content_type: ContentType,            // See ContentType
+    xor_name: XorName,
+    data_type: DataType,                  // See DataType enum
+    content_type: ContentType,            // See ContentType enum
     content_type_u16: u16,                // validated u16 id of content_type
     path: String,                         // path, no separator, percent-encoded
     query_string: String,                 // query-string, no separator, url-encoded
@@ -273,9 +273,10 @@ impl SafeUrl {
     /// * `fragment` - url fragment, without # separator
     /// * `content_version` - overrides value of "?v" in query-string if not None.
     pub fn new(
-        address: DataAddress,
+        xor_name: XorName,
         nrs_name: Option<&str>,
         type_tag: u64,
+        data_type: DataType,
         content_type: ContentType,
         path: Option<&str>,
         sub_names: Option<Vec<String>>,
@@ -300,11 +301,10 @@ impl SafeUrl {
             let tmpurl = format!("{}{}", URL_PROTOCOL, nh);
             let parts = UrlParts::parse(&tmpurl, false)?;
             let hashed_name = Self::xor_name_from_nrs_string(&parts.top_name);
-            if &hashed_name != address.name() {
+            if hashed_name != xor_name {
                 let msg = format!(
-                    "input mis-match. nrs_name `{}` does not hash to address.name() `{}`",
-                    parts.top_name,
-                    address.name()
+                    "input mismatch. nrs_name `{}` does not hash to xor_name `{}`",
+                    parts.top_name, xor_name
                 );
                 return Err(Error::InvalidInput(msg));
             }
@@ -332,12 +332,13 @@ impl SafeUrl {
         // finally, instantiate.
         let mut url = Self {
             encoding_version: XOR_URL_VERSION_1,
-            address,
+            xor_name,
             public_name,
             top_name,
             sub_names: sub_names_str,
             sub_names_vec,
             type_tag,
+            data_type,
             content_type,
             content_type_u16,
             path: String::default(),         // set below.
@@ -401,13 +402,12 @@ impl SafeUrl {
     /// * `nrsurl` - an nrsurl.
     pub fn from_nrsurl(nrsurl: &str) -> Result<Self> {
         let parts = UrlParts::parse(nrsurl, false)?;
-        let hashed_name = Self::xor_name_from_nrs_string(&parts.top_name);
-        let address = DataAddress::Register(RegisterAddress::new(hashed_name, NRS_MAP_TYPE_TAG));
-
+        let xor_name = Self::xor_name_from_nrs_string(&parts.top_name);
         Self::new(
-            address,
+            xor_name,
             Some(&parts.public_name),
             NRS_MAP_TYPE_TAG,
+            DataType::Register,
             ContentType::NrsMapContainer,
             Some(&parts.path),
             Some(parts.sub_names_vec),
@@ -488,10 +488,10 @@ impl SafeUrl {
         type_tag_bytes[8 - type_tag_bytes_len..].copy_from_slice(&xorurl_bytes[type_tag_offset..]);
         let type_tag: u64 = u64::from_be_bytes(type_tag_bytes);
 
-        let address = match xorurl_bytes[3] {
-            0 => DataAddress::SafeKey(xor_name),
-            1 => DataAddress::Bytes(xor_name),
-            2 => DataAddress::Register(RegisterAddress::new(xor_name, type_tag)),
+        let data_type = match xorurl_bytes[3] {
+            0 => DataType::SafeKey,
+            1 => DataType::File,
+            2 => DataType::Register,
             other => {
                 return Err(Error::InvalidXorUrl(format!(
                     "Invalid data type encoded in the XOR-URL string: {other}"
@@ -500,9 +500,10 @@ impl SafeUrl {
         };
 
         Self::new(
-            address,
+            xor_name,
             None, // no nrs_name for an xorurl
             type_tag,
+            data_type,
             content_type,
             Some(&parts.path),
             Some(parts.sub_names_vec),
@@ -514,9 +515,10 @@ impl SafeUrl {
 
     pub fn from_safekey(xor_name: XorName) -> Result<Self> {
         SafeUrl::new(
-            DataAddress::SafeKey(xor_name),
+            xor_name,
             None,
             0,
+            DataType::SafeKey,
             ContentType::Raw,
             None,
             None,
@@ -526,11 +528,12 @@ impl SafeUrl {
         )
     }
 
-    pub fn from_bytes(address: XorName, content_type: ContentType) -> Result<Self> {
+    pub fn from_file(address: XorName, content_type: ContentType) -> Result<Self> {
         SafeUrl::new(
-            DataAddress::Bytes(address),
+            address,
             None,
             0,
+            DataType::File,
             content_type,
             None,
             None,
@@ -546,9 +549,10 @@ impl SafeUrl {
         content_type: ContentType,
     ) -> Result<Self> {
         SafeUrl::new(
-            DataAddress::Register(RegisterAddress::new(xor_name, type_tag)),
+            xor_name,
             None,
             type_tag,
+            DataType::Register,
             content_type,
             None,
             None,
@@ -570,12 +574,7 @@ impl SafeUrl {
 
     /// returns SAFE data type
     pub fn data_type(&self) -> DataType {
-        match self.address {
-            DataAddress::Bytes(_) => DataType::File,
-            DataAddress::Register(_) => DataType::Register,
-            DataAddress::SafeKey(_) => DataType::SafeKey,
-            DataAddress::Spentbook(_) => DataType::Spentbook,
-        }
+        self.data_type.clone()
     }
 
     /// returns SAFE content type
@@ -592,12 +591,7 @@ impl SafeUrl {
 
     /// returns XorName
     pub fn xorname(&self) -> XorName {
-        *self.address().name()
-    }
-
-    /// returns address
-    pub fn address(&self) -> DataAddress {
-        self.address
+        self.xor_name
     }
 
     /// returns public_name portion of xorurl using the
@@ -915,7 +909,7 @@ impl SafeUrl {
         cid_vec.push(self.data_type() as u8);
 
         // add the xor_name 32 bytes
-        cid_vec.extend_from_slice(&self.address().name().0);
+        cid_vec.extend_from_slice(&self.xor_name.0);
 
         // let's get non-zero bytes only from th type_tag
         let start_byte: usize = (self.type_tag.leading_zeros() / 8) as usize;
@@ -1155,13 +1149,13 @@ mod tests {
         // Tests some errors when calling Self::new()
 
         let xor_name = XorName(*b"12345678901234567890123456789012");
-        let address = DataAddress::register(xor_name, NRS_MAP_TYPE_TAG);
 
         // test: "Media-type '{}' not supported. You can use 'ContentType::Raw' as the 'content_type' for this type of content",
         let result = SafeUrl::new(
-            address,
+            xor_name,
             None,
             NRS_MAP_TYPE_TAG,
+            DataType::Register,
             ContentType::MediaType("garbage/trash".to_string()),
             None,
             None,
@@ -1173,9 +1167,10 @@ mod tests {
 
         // test: "nrs_name cannot be empty string."
         let result = SafeUrl::new(
-            address,
+            xor_name,
             Some(""), // passing empty string as nrs name
             NRS_MAP_TYPE_TAG,
+            DataType::Register,
             ContentType::NrsMapContainer,
             None,
             None,
@@ -1185,11 +1180,12 @@ mod tests {
         );
         verify_expected_result!(result, Err(Error::InvalidInput(err)) if err.contains("nrs_name cannot be empty string."))?;
 
-        // test: "input mis-match. nrs_name `{}` does not hash to xor_name `{}`"
+        // test: "input mismatch. nrs_name `{}` does not hash to xor_name `{}`"
         let result = SafeUrl::new(
-            address,
+            xor_name,
             Some("a.b.c"), // passing nrs name not matching xor_name.
             NRS_MAP_TYPE_TAG,
+            DataType::Register,
             ContentType::NrsMapContainer,
             None,
             None,
@@ -1197,13 +1193,14 @@ mod tests {
             None,
             None,
         );
-        verify_expected_result!(result, Err(Error::InvalidInput(err)) if err.contains("does not hash to address.name()"))?;
+        verify_expected_result!(result, Err(Error::InvalidInput(err)) if err.contains("does not hash to xor_name"))?;
 
         // test: "Host contains empty subname" (in nrs name)
         let result = SafeUrl::new(
-            address,
+            xor_name,
             Some("a..b.c"), // passing empty sub-name in nrs name
             NRS_MAP_TYPE_TAG,
+            DataType::Register,
             ContentType::NrsMapContainer,
             None,
             None,
@@ -1215,9 +1212,10 @@ mod tests {
 
         // test: "empty subname" (in xorurl sub_names)
         let result = SafeUrl::new(
-            address,
+            xor_name,
             None, // not NRS
             NRS_MAP_TYPE_TAG,
+            DataType::Register,
             ContentType::NrsMapContainer,
             None,
             Some(vec!["a".to_string(), "".to_string(), "b".to_string()]),
@@ -1233,12 +1231,12 @@ mod tests {
     #[test]
     fn test_url_base32_encoding() -> Result<()> {
         let xor_name = XorName(*b"12345678901234567890123456789012");
-        let address = DataAddress::bytes(xor_name);
 
         let xorurl = SafeUrl::new(
-            address,
+            xor_name,
             None,
             0xa632_3c4d_4a32,
+            DataType::File,
             ContentType::Raw,
             None,
             None,
@@ -1257,7 +1255,7 @@ mod tests {
     #[test]
     fn test_url_base32z_encoding() -> Result<()> {
         let xor_name = XorName(*b"12345678901234567890123456789012");
-        let xorurl = SafeUrl::from_bytes(xor_name, ContentType::Raw)?.encode(XorUrlBase::Base32z);
+        let xorurl = SafeUrl::from_file(xor_name, ContentType::Raw)?.encode(XorUrlBase::Base32z);
         let base32z_xorurl = "safe://hyryyyyjtge3uepjsghhd1cbtge3uepjsghhd1cbtge3uepjsghhd1cbtge";
         assert_eq!(xorurl, base32z_xorurl);
         Ok(())
@@ -1285,7 +1283,7 @@ mod tests {
     fn test_url_default_base_encoding() -> Result<()> {
         let xor_name = XorName(*b"12345678901234567890123456789012");
         let base32z_xorurl = "safe://hyryyyyjtge3uepjsghhd1cbtge3uepjsghhd1cbtge3uepjsghhd1cbtge";
-        let xorurl = SafeUrl::from_bytes(xor_name, ContentType::Raw)?.encode(DEFAULT_XORURL_BASE);
+        let xorurl = SafeUrl::from_file(xor_name, ContentType::Raw)?.encode(DEFAULT_XORURL_BASE);
         assert_eq!(xorurl, base32z_xorurl);
         Ok(())
     }
@@ -1300,11 +1298,11 @@ mod tests {
         let query_string = "k1=v1&k2=v2";
         let query_string_v = format!("{}&v={}", query_string, content_version);
         let fragment = "myfragment";
-        let address = DataAddress::bytes(xor_name);
         let xorurl = SafeUrl::new(
-            address,
+            xor_name,
             None,
             type_tag,
+            DataType::File,
             ContentType::Raw,
             Some(subdirs),
             Some(vec!["subname".to_string()]),
@@ -1350,12 +1348,12 @@ mod tests {
     fn test_url_decoding_with_subname() -> Result<()> {
         let xor_name = XorName(*b"12345678901234567890123456789012");
         let type_tag: u64 = 0x0eef;
-        let address = DataAddress::bytes(xor_name);
 
         let xorurl_with_subname = SafeUrl::new(
-            address,
+            xor_name,
             None,
             type_tag,
+            DataType::File,
             ContentType::NrsMapContainer,
             None,
             Some(vec!["sub".to_string()]),
@@ -1386,9 +1384,8 @@ mod tests {
     #[test]
     fn encode_bytes_should_set_media_type() -> Result<()> {
         let xor_name = XorName(*b"12345678901234567890123456789012");
-        let xorurl =
-            SafeUrl::from_bytes(xor_name, ContentType::MediaType("text/html".to_string()))?
-                .encode(XorUrlBase::Base32z);
+        let xorurl = SafeUrl::from_file(xor_name, ContentType::MediaType("text/html".to_string()))?
+            .encode(XorUrlBase::Base32z);
         let url = SafeUrl::from_url(xorurl.as_str())?;
         assert_eq!(
             ContentType::MediaType("text/html".to_string()),
@@ -1400,9 +1397,8 @@ mod tests {
     #[test]
     fn encode_bytes_should_set_data_type() -> Result<()> {
         let xor_name = XorName(*b"12345678901234567890123456789012");
-        let xorurl =
-            SafeUrl::from_bytes(xor_name, ContentType::MediaType("text/html".to_string()))?
-                .encode(XorUrlBase::Base32z);
+        let xorurl = SafeUrl::from_file(xor_name, ContentType::MediaType("text/html".to_string()))?
+            .encode(XorUrlBase::Base32z);
 
         let url = SafeUrl::from_url(&xorurl)?;
         assert_eq!(url.data_type(), DataType::File);
@@ -1429,9 +1425,8 @@ mod tests {
     #[test]
     fn test_url_too_short() -> Result<()> {
         let xor_name = XorName(*b"12345678901234567890123456789012");
-        let xorurl =
-            SafeUrl::from_bytes(xor_name, ContentType::MediaType("text/html".to_string()))?
-                .encode(XorUrlBase::Base32z);
+        let xorurl = SafeUrl::from_file(xor_name, ContentType::MediaType("text/html".to_string()))?
+            .encode(XorUrlBase::Base32z);
 
         // TODO: we need to add checksum to be able to detect even 1 single char change
         let len = xorurl.len() - 2;

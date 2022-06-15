@@ -7,17 +7,12 @@
 // specific language governing permissions and limitations relating to use of the SAFE Network
 // Software.
 
-use sn_interface::types::Keypair;
 use sn_url::{DataType, Error, SafeUrl, XorUrlBase};
 use xor_name::XorName;
 
 fn main() -> Result<(), Error> {
-    // Let's generate a ranadom key pair
-    let keypair = Keypair::new_ed25519();
-
-    // We get the corresponding Xorname for
-    // the random public key we obtained
-    let xorname = XorName::from(keypair.public_key());
+    // Let's generate a random XorName
+    let xorname = XorName::random(&mut rand::thread_rng());
 
     // We can encode a SafeKey XOR-URL using the Xorname
     // and specifying Base32z as the base encoding for it
